@@ -1,32 +1,44 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { marked } from 'marked';
 
-export default function App({ apiKey, initialHistory, onHistoryChange, useMarkdown, customQuery }) {
+export default function App({ apiKey, initialHistory, onHistoryChange, useMarkdown, customQuery, userName, aiContext }) {
   const [messages, setMessages] = useState(initialHistory || []);
-  const [input, setInput] = useState(''); // RE-ADDED missing state
+  const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
+  const [isAiEnabled, setIsAiEnabled] = useState(true); // Internal UI Toggle
   const lastProcessedRef = useRef(null);
+  const scrollRef = useRef(null);
 
   useEffect(() => {
     if (initialHistory) setMessages(initialHistory);
-  }, [initialHistory]);
+    const syncToggle = async () => {
+      if (customQuery) {
+        const externalState = await customQuery();
+        setIsAiEnabled(externalState);
+      }
+    };
+    syncToggle();
+  }, [initialHistory, customQuery]);
+
+  // Auto-scroll to bottom
+  useEffect(() => {
+    if (scrollRef.current) {
+      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+    }
+  }, [messages, loading]);
 
   useEffect(() => {
     const lastMsg = messages[messages.length - 1];
-    
-    // Triggers ONLY if the message originated in THIS browser tab
-    if (lastMsg?.role === 'user' && lastMsg.isLocal && !loading) {
+    // Security check: Only trigger if local and AI is enabled
+    if (lastMsg?.role === 'user' && lastMsg.isLocal && isAiEnabled && !loading) {
       const msgContent = lastMsg.parts[0].text;
       if (msgContent !== lastProcessedRef.current) {
         triggerGemini(messages);
       }
     }
-  }, [messages]);
+  }, [messages, isAiEnabled]);
 
   const triggerGemini = async (history) => {
-    const isAiEnabled = customQuery ? await customQuery() : false; // Check index.html toggle
-    if (!isAiEnabled) return;
-
     setLoading(true);
     lastProcessedRef.current = history[history.length - 1].parts[0].text;
 
@@ -35,7 +47,10 @@ export default function App({ apiKey, initialHistory, onHistoryChange, useMarkdo
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ 
-          contents: history.map(({role, parts}) => ({role, parts})) // Strip isLocal for API
+            system_instruction: {
+              parts: [{ text: aiContext || "You are a helpful assistant in a group chat." }]
+            },
+          contents: history.map(({role, parts}) => ({role, parts})) 
         })
       });
 
@@ -43,8 +58,7 @@ export default function App({ apiKey, initialHistory, onHistoryChange, useMarkdo
       const botText = data.candidates?.[0]?.content?.parts?.[0]?.text;
 
       if (botText) {
-        const newMsg = { role: 'model', parts: [{ text: botText }], isLocal: true };
-        const finalHistory = [...history, newMsg];
+        const finalHistory = [...history, { role: 'model', parts: [{ text: botText }], isLocal: true }];
         setMessages(finalHistory); 
         onHistoryChange(finalHistory);
       }
@@ -57,13 +71,11 @@ export default function App({ apiKey, initialHistory, onHistoryChange, useMarkdo
 
   const handleSend = () => {
     if (!input.trim() || loading) return;
-    const updatedHistory = [
-      ...messages, 
-      { role: 'user', parts: [{ text: input }], isLocal: true }
-    ];
-    setMessages(updatedHistory); // Update local UI
+    const formattedText = `${userName}: ${input}`;
+    const updatedHistory = [...messages, { role: 'user', parts: [{ text: formattedText }], isLocal: true }];
+    setMessages(updatedHistory);
     setInput('');
-    onHistoryChange(updatedHistory); // Sync to bridge/socket
+    onHistoryChange(updatedHistory);
   };
 
   const renderContent = (text, isBot) => {
@@ -71,28 +83,67 @@ export default function App({ apiKey, initialHistory, onHistoryChange, useMarkdo
   };
 
   return (
-    <div className="fixed bottom-5 right-5 w-96 max-h-[600px] bg-white border rounded-2xl shadow-xl flex flex-col overflow-hidden z-[9999]">
-      <div className="p-4 text-white font-bold flex justify-between bg-blue-600">
-        <span>AI Assistant</span>
-        {loading && <span className="text-xs animate-pulse italic">Thinking...</span>}
+    <div className="fixed bottom-5 right-5 w-96 max-h-[600px] bg-white border border-slate-200 rounded-2xl shadow-2xl flex flex-col overflow-hidden z-[9999] font-sans">
+      {/* Modern Header with Toggle */}
+      <div className="p-4 bg-slate-900 text-white flex justify-between items-center">
+        <div>
+          <h3 className="font-bold text-sm">AI Assistant</h3>
+          <p className="text-[10px] text-slate-400 uppercase tracking-widest">Group Session</p>
+        </div>
+        <div className="flex items-center gap-2 bg-slate-800 px-2 py-1 rounded-lg border border-slate-700">
+          <input 
+            type="checkbox" 
+            id="widget-ai"
+            checked={isAiEnabled}
+            onChange={(e) => setIsAiEnabled(e.target.checked)}
+            className="w-3 h-3 accent-blue-500 cursor-pointer"
+          />
+          <label htmlFor="widget-ai" className="text-[10px] font-bold cursor-pointer select-none">ASK AI</label>
+        </div>
       </div>
-      <div className="flex-1 overflow-y-auto p-4 space-y-4 bg-slate-50">
-        {messages.map((m, i) => (
-          <div key={i} className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-            <div className={`max-w-[85%] p-3 rounded-2xl text-sm ${m.role === 'user' ? 'bg-blue-600 text-white' : 'bg-white border'}`}>
-              {renderContent(m.parts[0].text, m.role === 'model')}
+
+      {/* Message List */}
+      <div ref={scrollRef} className="flex-1 overflow-y-auto p-4 space-y-4 bg-slate-50">
+        {messages.map((m, i) => {
+          const isBot = m.role === 'model';
+          const alignRight = m.isLocal && !isBot;
+          return (
+            <div key={i} className={`flex ${alignRight ? 'justify-end' : 'justify-start'}`}>
+              <div className={`max-w-[85%] p-3 rounded-2xl text-sm ${
+                alignRight 
+                  ? 'bg-blue-600 text-white rounded-tr-none shadow-md' 
+                  : 'bg-white text-slate-700 border border-slate-200 rounded-tl-none shadow-sm'
+              }`}>
+                {renderContent(m.parts[0].text, isBot)}
+              </div>
+            </div>
+          );
+        })}
+        {loading && (
+          <div className="flex justify-start">
+            <div className="bg-white border border-slate-200 p-3 rounded-2xl rounded-tl-none shadow-sm flex gap-1">
+              <span className="w-1.5 h-1.5 bg-slate-400 rounded-full animate-bounce"></span>
+              <span className="w-1.5 h-1.5 bg-slate-400 rounded-full animate-bounce [animation-delay:0.2s]"></span>
+              <span className="w-1.5 h-1.5 bg-slate-400 rounded-full animate-bounce [animation-delay:0.4s]"></span>
             </div>
           </div>
-        ))}
+        )}
       </div>
-      <div className="p-4 bg-white border-t flex gap-2">
+
+      {/* Modern Input */}
+      <div className="p-4 bg-white border-t border-slate-100 flex gap-2">
         <input 
-          className="flex-1 bg-gray-100 rounded-full px-4 py-2 text-sm outline-none" 
+          className="flex-1 bg-slate-100 border-none rounded-xl px-4 py-2.5 text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all" 
+          placeholder="Type a message..."
           value={input} 
           onChange={e => setInput(e.target.value)} 
           onKeyDown={e => e.key === 'Enter' && handleSend()} 
         />
-        <button onClick={handleSend} className="bg-blue-600 text-white w-10 h-10 rounded-full flex items-center justify-center">
+        <button 
+          onClick={handleSend} 
+          disabled={loading}
+          className="bg-blue-600 hover:bg-blue-700 text-white w-10 h-10 rounded-xl flex items-center justify-center transition-all disabled:opacity-50 active:scale-95 shadow-md shadow-blue-200"
+        >
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z"/></svg>
         </button>
       </div>

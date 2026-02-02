@@ -15,6 +15,7 @@ class AIChatElement extends HTMLElement {
     this._onQuery = null;
     this._onHandleResult = null;
     this._useMarkdown = false; // Internal flag
+    this._userName = 'Guest';
   }
 
   // Define a setter for onQuery so it triggers a re-render when changed
@@ -37,10 +38,16 @@ class AIChatElement extends HTMLElement {
   }
 
   static get observedAttributes() {
-    return ['api-key', 'use-markdown']; //
+    return ['api-key', 'use-markdown', 'user-name', 'ai-context']; //
   }
 
   attributeChangedCallback(name, oldValue, newValue) {
+    if (name === 'ai-context') {
+      this._aiContext = newValue;
+    }
+    if (name === 'user-name') {
+      this._userName = newValue || 'Guest';
+    }
     if (name === 'use-markdown') {
       this._useMarkdown = newValue === 'true'; //
     }
@@ -51,6 +58,15 @@ class AIChatElement extends HTMLElement {
   set useMarkdown(val) {
     this._useMarkdown = !!val;
     this.render();
+  }
+
+  set userName(val) {
+    this._userName = val;
+    this.render();
+  }
+
+  set aiContext(val) {
+    this.setAttribute('ai-context', val);
   }
 
   connectedCallback() {
@@ -94,7 +110,9 @@ class AIChatElement extends HTMLElement {
       <App 
         apiKey={this.getAttribute('api-key')}
         initialHistory={this._state.history}
+        aiContext={this.getAttribute('ai-context')}
         // Use the internal stored methods
+        userName={this._userName}
         useMarkdown={this._useMarkdown}
         customQuery={this._onQuery}
         customHandleResult={this._onHandleResult}

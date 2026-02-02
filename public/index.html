@@ -59,6 +59,10 @@
         bridge.pushHistory([...bridge.history, newMessage]);
     });
 
+    usernameInput.addEventListener('input', (e) => {
+        bridge.userName = e.target.value; // Syncs to React immediately
+    });
+
     // 2. Sending locally: tag with isLocal
     async function sendMessage() {
         const input = document.getElementById('user-input');
@@ -93,12 +97,27 @@
         return aiToggle.checked; // Returns true/false to App.jsx
     };
 
+    function setAiPersonality(type) {
+        if (type === 'pirate') {
+            bridge.aiContext = "You are a pirate. Speak in pirate slang and be grumpy.";
+        } else if (type === 'scientist') {
+            bridge.aiContext = "You are a formal scientist. Give detailed, technical group chat answers.";
+        } else {
+            bridge.aiContext = "You are a helpful group chat assistant.";
+        }
+    }
+
+    // setAiPersonality('pirate');
+
     function renderHistory(history) {
         if (!history) return;
         chatWindow.innerHTML = history.map(msg => {
             const isBot = msg.role === 'model';
-            const rawText = msg.parts?.[0]?.text || "";
             
+            // FIX: Only align right if it's local AND NOT a bot
+            const isMyMessage = msg.isLocal === true && !isBot;
+            
+            const rawText = msg.parts?.[0]?.text || "";
             let name = isBot ? "Gemini" : "User";
             let cleanText = rawText;
 
@@ -109,7 +128,7 @@
             }
 
             return `
-                <div class="msg ${isBot ? 'bot-msg' : 'user-msg'}">
+                <div class="msg ${isMyMessage ? 'user-msg' : 'bot-msg'}">
                     <span class="sender-tag">${name.toUpperCase()}</span>
                     <div class="bubble">${isBot ? bridge.parse(cleanText) : cleanText}</div>
                 </div>
