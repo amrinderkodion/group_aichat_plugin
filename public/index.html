@@ -36,6 +36,7 @@
     <div id="chat-window"></div>
     
     <div style="display: flex; gap: 10px; margin-top: 10px;">
+        <input type="file" id="file-input" style="font-size: 12px;">
         <input type="text" id="user-input" style="flex: 1; padding: 10px;" placeholder="Write a message...">
         <button onclick="sendMessage()" style="padding: 10px 20px; cursor: pointer;">Send</button>
     </div>
@@ -65,19 +66,37 @@
 
     // 2. Sending locally: tag with isLocal
     async function sendMessage() {
-        const input = document.getElementById('user-input');
-        const text = input.value.trim();
-        if (!text) return;
+        const inputField = document.getElementById('user-input');
+        const fileInput = document.getElementById('file-input');
+        const text = inputField.value.trim();
+        const files = fileInput.files;
+
+        if (!text && files.length === 0) return;
+
+        // Process files
+        const fileParts = await Promise.all(
+            Array.from(files).map(file => readFileAsBase64(file))
+        );
+
+        // Build parts array: Files first, then the user's text prompt
+        const parts = [...fileParts];
+        if (text) {
+            parts.push({ text: `${usernameInput.value}: ${text}` });
+        } else {
+            parts.push({ text: `${usernameInput.value}: Analyze these files.` });
+        }
 
         const newMessage = { 
             role: 'user', 
-            parts: [{ text: `${usernameInput.value}: ${text}` }],
-            isLocal: true // STAYS IN THIS BROWSER ONLY
+            parts: parts,
+            isLocal: true // Triggers AI in App.jsx
         };
 
         isSyncingFromRemote = false; 
         bridge.pushHistory([...bridge.history, newMessage]);
-        input.value = '';
+        
+        inputField.value = '';
+        fileInput.value = ''; // Reset file input
     }
 
     bridge.addEventListener('history-updated', (e) => {
@@ -113,11 +132,15 @@
         if (!history) return;
         chatWindow.innerHTML = history.map(msg => {
             const isBot = msg.role === 'model';
-            
-            // FIX: Only align right if it's local AND NOT a bot
             const isMyMessage = msg.isLocal === true && !isBot;
             
-            const rawText = msg.parts?.[0]?.text || "";
+            // FIX: Find the text part anywhere in the parts array
+            const textPart = msg.parts.find(p => p.text);
+            const rawText = textPart ? textPart.text : "";
+            
+            // Check if there is file data in the parts
+            const hasFile = msg.parts.some(p => p.inline_data);
+            
             let name = isBot ? "Gemini" : "User";
             let cleanText = rawText;
 
@@ -130,11 +153,26 @@
             return `
                 <div class="msg ${isMyMessage ? 'user-msg' : 'bot-msg'}">
                     <span class="sender-tag">${name.toUpperCase()}</span>
+                    ${hasFile ? `<div style="font-size: 10px; opacity: 0.7; margin-bottom: 4px;">📎 File Attached</div>` : ''}
                     <div class="bubble">${isBot ? bridge.parse(cleanText) : cleanText}</div>
                 </div>
             `;
         }).join('');
         chatWindow.scrollTop = chatWindow.scrollHeight;
+    }
+
+    function readFileAsBase64(file) {
+        return new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = () => resolve({
+                inline_data: {
+                    mime_type: file.type || "text/plain",
+                    data: reader.result.split(',')[1] 
+                }
+            });
+            reader.onerror = reject;
+            reader.readAsDataURL(file);
+        });
     }
 </script>
 </body>

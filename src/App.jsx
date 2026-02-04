@@ -9,6 +9,9 @@ export default function App({ apiKey, initialHistory, onHistoryChange, useMarkdo
   const lastProcessedRef = useRef(null);
   const scrollRef = useRef(null);
 
+  const getMessageText = (parts) => parts.find(p => p.text)?.text || "";
+  const hasFileData = (parts) => parts.some(p => p.inline_data);
+
   useEffect(() => {
     if (initialHistory) setMessages(initialHistory);
     const syncToggle = async () => {
@@ -27,12 +30,14 @@ export default function App({ apiKey, initialHistory, onHistoryChange, useMarkdo
     }
   }, [messages, loading]);
 
+  // Inside App.jsx - Update the trigger useEffect
   useEffect(() => {
     const lastMsg = messages[messages.length - 1];
-    // Security check: Only trigger if local and AI is enabled
+    
+    // Trigger if message is local, AI is enabled, and not currently loading
     if (lastMsg?.role === 'user' && lastMsg.isLocal && isAiEnabled && !loading) {
-      const msgContent = lastMsg.parts[0].text;
-      if (msgContent !== lastProcessedRef.current) {
+      const msgText = getMessageText(lastMsg.parts); 
+      if (msgText !== lastProcessedRef.current || hasFileData(lastMsg.parts)) {
         triggerGemini(messages);
       }
     }
@@ -40,16 +45,18 @@ export default function App({ apiKey, initialHistory, onHistoryChange, useMarkdo
 
   const triggerGemini = async (history) => {
     setLoading(true);
-    lastProcessedRef.current = history[history.length - 1].parts[0].text;
+    const lastMsg = history[history.length - 1];
+    lastProcessedRef.current = getMessageText(lastMsg.parts);
 
     try {
       const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ 
-            system_instruction: {
-              parts: [{ text: aiContext || "You are a helpful assistant in a group chat." }]
-            },
+          system_instruction: {
+            parts: [{ text: aiContext || "You are a helpful assistant in a group chat. Analyze any uploaded files and answer the user's prompt." }]
+          },
+          // Send all parts (text + inline_data) to the API
           contents: history.map(({role, parts}) => ({role, parts})) 
         })
       });
@@ -78,10 +85,6 @@ export default function App({ apiKey, initialHistory, onHistoryChange, useMarkdo
     onHistoryChange(updatedHistory);
   };
 
-  const renderContent = (text, isBot) => {
-    return isBot && useMarkdown ? <div dangerouslySetInnerHTML={{ __html: marked.parse(text) }} /> : text;
-  };
-
   return (
     <div className="fixed bottom-5 right-5 w-96 max-h-[600px] bg-white border border-slate-200 rounded-2xl shadow-2xl flex flex-col overflow-hidden z-[9999] font-sans">
       {/* Modern Header with Toggle */}
@@ -104,9 +107,15 @@ export default function App({ apiKey, initialHistory, onHistoryChange, useMarkdo
 
       {/* Message List */}
       <div ref={scrollRef} className="flex-1 overflow-y-auto p-4 space-y-4 bg-slate-50">
+        {/* Inside the message mapping in your return block */}
         {messages.map((m, i) => {
           const isBot = m.role === 'model';
           const alignRight = m.isLocal && !isBot;
+          
+          // Use helpers to extract content from multi-part messages
+          const text = getMessageText(m.parts);
+          const hasFile = hasFileData(m.parts);
+
           return (
             <div key={i} className={`flex ${alignRight ? 'justify-end' : 'justify-start'}`}>
               <div className={`max-w-[85%] p-3 rounded-2xl text-sm ${
@@ -114,7 +123,17 @@ export default function App({ apiKey, initialHistory, onHistoryChange, useMarkdo
                   ? 'bg-blue-600 text-white rounded-tr-none shadow-md' 
                   : 'bg-white text-slate-700 border border-slate-200 rounded-tl-none shadow-sm'
               }`}>
-                {renderContent(m.parts[0].text, isBot)}
+                {/* Visual indicator for attachments */}
+                {hasFile && (
+                  <div className="flex items-center gap-1 text-[10px] opacity-70 mb-1 italic">
+                    <span>📎 Attachment processed</span>
+                  </div>
+                )}
+                {isBot && useMarkdown ? (
+                  <div className="markdown-content" dangerouslySetInnerHTML={{ __html: marked.parse(text) }} />
+                ) : (
+                  text
+                )}
               </div>
             </div>
           );
